@@ -1,0 +1,30 @@
+# Binaires et dossiers de compilation
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+server-linux
+agent-linux
+
+# Fichiers temporaires Go
+*.test
+*.out
+
+# IDEs & Éditeurs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Fichiers OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Logs & scripts / docs internes
+*.log
+check_pve.ps1
+STUDIO_DESIGN_SYSTEM.md
