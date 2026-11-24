@@ -1,0 +1,13 @@
+[Unit]
+Description=ak-ses Remote Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root
+ExecStart=/root/server-linux -port 8080 -bin-dir /root/bin
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
