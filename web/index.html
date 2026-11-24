@@ -352,10 +352,11 @@
         const disp_grp = document.getElementById('disp-grp');
 
         function upd_cde() {
+            const pr = window.location.protocol;
             if (cur_tb === 'cmd') {
-                cde_bx.innerText = `curl -s -o %TEMP%\\agent.exe http://${hst}/dl/agent.exe && %TEMP%\\agent.exe -server ${hst}`;
+                cde_bx.innerText = `curl -s -o %TEMP%\\agent.exe ${pr}//${hst}/dl/agent.exe && %TEMP%\\agent.exe -server ${hst}`;
             } else {
-                cde_bx.innerText = `irm http://${hst}/dl/run.ps1 | iex`;
+                cde_bx.innerText = `irm ${pr}//${hst}/dl/run.ps1 | iex`;
             }
         }
         upd_cde();

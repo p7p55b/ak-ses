@@ -65,6 +65,7 @@ func main() {
 		script := fmt.Sprintf(`$url = "%s://%s/dl/agent.exe"
 $out = "$env:TEMP\agent.exe"
 (New-Object System.Net.WebClient).DownloadFile($url, $out)
+Unblock-File $out -ErrorAction SilentlyContinue
 Start-Process -FilePath $out -ArgumentList "-server %s" -NoNewWindow
 `, proto, host, host)
 		w.Header().Set("Content-Type", "text/plain")
