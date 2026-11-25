@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -17,10 +18,15 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var (
+	serverVersion = "v1.1.0"
+)
+
 type AgentSession struct {
 	ID        string          `json:"id"`
 	Hostname  string          `json:"hostname"`
 	OS        string          `json:"os"`
+	Version   string          `json:"version"`
 	Connected time.Time       `json:"connected"`
 	Displays  []interface{}   `json:"displays"`
 	Conn      *websocket.Conn `json:"-"`
@@ -80,10 +86,128 @@ func getCompilerInfo() (bool, string) {
 	return true, strings.TrimSpace(string(out))
 }
 
+type GitHubAsset struct {
+	Name               string `json:"name"`
+	Size               int64  `json:"size"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
+type GitHubRelease struct {
+	TagName     string        `json:"tag_name"`
+	Name        string        `json:"name"`
+	Body        string        `json:"body"`
+	PublishedAt string        `json:"published_at"`
+	HtmlURL     string        `json:"html_url"`
+	Assets      []GitHubAsset `json:"assets"`
+}
+
+func fetchLatestRelease(repo string) (*GitHubRelease, error) {
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "ak-ses-server")
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API a repondu avec statut %d", resp.StatusCode)
+	}
+
+	var rel GitHubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return nil, err
+	}
+	return &rel, nil
+}
+
+func downloadAsset(assetURL, destPath string) error {
+	client := &http.Client{Timeout: 120 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, assetURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "ak-ses-server")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("statut HTTP %d lors du telechargement", resp.StatusCode)
+	}
+
+	tmpFile := destPath + fmt.Sprintf(".tmp_%d", time.Now().UnixNano())
+	out, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return err
+	}
+
+	written, err := io.Copy(out, resp.Body)
+	out.Close()
+	if err != nil {
+		_ = os.Remove(tmpFile)
+		return err
+	}
+
+	if written < 100000 {
+		_ = os.Remove(tmpFile)
+		return fmt.Errorf("fichier telecharge incomplet (%d octets)", written)
+	}
+
+	_ = os.Remove(destPath)
+	if err := os.Rename(tmpFile, destPath); err != nil {
+		_ = os.Remove(tmpFile)
+		return err
+	}
+
+	return nil
+}
+
+func sendUpdateToAgents(targetAgentID, version, downloadURL string) []string {
+	agentsMu.RLock()
+	defer agentsMu.RUnlock()
+
+	msg, _ := json.Marshal(map[string]interface{}{
+		"type":    "self_update",
+		"version": version,
+		"url":     downloadURL,
+	})
+
+	var updated []string
+	for id, a := range agents {
+		if targetAgentID != "" && id != targetAgentID {
+			continue
+		}
+		if a.Conn != nil {
+			a.mu.Lock()
+			err := a.Conn.WriteMessage(websocket.TextMessage, msg)
+			a.mu.Unlock()
+			if err == nil {
+				updated = append(updated, id)
+				log.Printf("[+] Ordre de mise a jour envoye a l'agent: %s (vers %s)", id, version)
+			} else {
+				log.Printf("[-] Echec envoi mise a jour a l'agent %s: %v", id, err)
+			}
+		}
+	}
+	return updated
+}
+
 func main() {
 	port := flag.Int("port", 8080, "Port d'écoute du serveur")
 	binDir := flag.String("bin-dir", "./bin", "Dossier contenant l'agent compilé")
 	agentSrc := flag.String("agent-src", "./agent", "Dossier contenant les sources Go de l'agent")
+	gitRepo := flag.String("repo", "p7p55b/ak-ses", "Repository GitHub pour les mises a jour (owner/repo)")
 	flag.Parse()
 
 	_ = os.MkdirAll(*binDir, 0755)
@@ -331,6 +455,181 @@ Start-Process -FilePath $out -ArgumentList "-server %s" -NoNewWindow
 		})
 	})
 
+	// 2.quater API pour verifier les mises a jour GitHub
+	http.HandleFunc("/api/updates/check", func(w http.ResponseWriter, r *http.Request) {
+		rel, err := fetchLatestRelease(*gitRepo)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("Erreur requete GitHub: %v", err),
+			})
+			return
+		}
+
+		var assetName, assetURL string
+		var assetSize int64
+		for _, a := range rel.Assets {
+			if strings.Contains(strings.ToLower(a.Name), "agent") && strings.HasSuffix(strings.ToLower(a.Name), ".exe") {
+				assetName = a.Name
+				assetURL = a.BrowserDownloadURL
+				assetSize = a.Size
+				break
+			}
+		}
+
+		agentsMu.RLock()
+		totalAgents := len(agents)
+		outdatedCount := 0
+		for _, a := range agents {
+			if a.Version != rel.TagName {
+				outdatedCount++
+			}
+		}
+		agentsMu.RUnlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":                true,
+			"repo":                   *gitRepo,
+			"current_server_version": serverVersion,
+			"latest_version":         rel.TagName,
+			"release_name":           rel.Name,
+			"release_notes":          rel.Body,
+			"published_at":           rel.PublishedAt,
+			"html_url":               rel.HtmlURL,
+			"asset_name":             assetName,
+			"asset_url":              assetURL,
+			"asset_size":             assetSize,
+			"update_available":       rel.TagName != serverVersion,
+			"connected_agents_count": totalAgents,
+			"outdated_agents_count":  outdatedCount,
+		})
+	})
+
+	// 2.quinquies API pour appliquer la mise a jour GitHub (telechargement release + envoi ordre aux agents)
+	http.HandleFunc("/api/updates/apply", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST requis", http.StatusMethodNotAllowed)
+			return
+		}
+
+		type ApplyReq struct {
+			AgentID         string `json:"agent_id"`
+			DownloadRelease *bool  `json:"download_release"`
+			Version         string `json:"version"`
+			URL             string `json:"url"`
+		}
+		var req ApplyReq
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		downloadRelease := true
+		if req.DownloadRelease != nil {
+			downloadRelease = *req.DownloadRelease
+		}
+
+		targetVersion := req.Version
+		downloadURL := req.URL
+		if downloadURL == "" {
+			downloadURL = "/dl/agent.exe"
+		}
+
+		if downloadRelease {
+			rel, err := fetchLatestRelease(*gitRepo)
+			if err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadGateway)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("Erreur verification release GitHub: %v", err),
+				})
+				return
+			}
+
+			targetVersion = rel.TagName
+			var assetURL string
+			for _, a := range rel.Assets {
+				if strings.Contains(strings.ToLower(a.Name), "agent") && strings.HasSuffix(strings.ToLower(a.Name), ".exe") {
+					assetURL = a.BrowserDownloadURL
+					break
+				}
+			}
+
+			if assetURL == "" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusNotFound)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"error":   "Aucun asset agent .exe trouve dans la release GitHub.",
+				})
+				return
+			}
+
+			log.Printf("[*] Telechargement de la release GitHub: %s (%s)...", rel.TagName, assetURL)
+			agentPath := filepath.Join(*binDir, "agent.exe")
+			if err := downloadAsset(assetURL, agentPath); err != nil {
+				log.Printf("[-] Echec telechargement release: %v", err)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("Erreur telechargement du binaire release: %v", err),
+				})
+				return
+			}
+			log.Printf("[+] Binaire release %s installe dans %s", rel.TagName, agentPath)
+		}
+
+		if targetVersion == "" {
+			targetVersion = "latest"
+		}
+
+		updated := sendUpdateToAgents(req.AgentID, targetVersion, downloadURL)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":        true,
+			"version":        targetVersion,
+			"updated_agents": updated,
+			"count":          len(updated),
+			"message":        fmt.Sprintf("Ordre de mise a jour diffuse a %d agent(s)", len(updated)),
+		})
+	})
+
+	// 2.sexies API pour diffuser le binaire agent localement compile (/dl/agent.exe)
+	http.HandleFunc("/api/updates/push-local", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST requis", http.StatusMethodNotAllowed)
+			return
+		}
+		type PushReq struct {
+			AgentID string `json:"agent_id"`
+		}
+		var req PushReq
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		agentPath := filepath.Join(*binDir, "agent.exe")
+		if _, err := os.Stat(agentPath); os.IsNotExist(err) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Binaire agent.exe introuvable sur le serveur (compilez-le d'abord)",
+			})
+			return
+		}
+
+		updated := sendUpdateToAgents(req.AgentID, "local-build", "/dl/agent.exe")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":        true,
+			"version":        "local-build",
+			"updated_agents": updated,
+			"count":          len(updated),
+			"message":        fmt.Sprintf("Ordre de mise a jour diffuse a %d agent(s)", len(updated)),
+		})
+	})
+
 	// 3. WebSocket pour l'Agent (flux vidéo + réception inputs)
 	http.HandleFunc("/ws/agent", handleAgentWS)
 
@@ -367,11 +666,16 @@ func handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 	hostname := r.URL.Query().Get("hostname")
 	osName := r.URL.Query().Get("os")
+	agentVer := r.URL.Query().Get("version")
+	if agentVer == "" {
+		agentVer = "v1.0.0"
+	}
 
 	session := &AgentSession{
 		ID:        agentID,
 		Hostname:  hostname,
 		OS:        osName,
+		Version:   agentVer,
 		Connected: time.Now(),
 		Conn:      conn,
 	}
@@ -380,7 +684,7 @@ func handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	agents[agentID] = session
 	agentsMu.Unlock()
 
-	log.Printf("[+] Machine connectée: %s (%s, %s)", agentID, hostname, osName)
+	log.Printf("[+] Machine connectée: %s (%s, %s, %s)", agentID, hostname, osName, agentVer)
 
 	defer func() {
 		agentsMu.Lock()
