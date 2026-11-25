@@ -86,8 +86,8 @@ func fastSampleHash(pix []byte) uint64 {
 var defaultServer = "localhost:8080"
 
 // agentVersion can be overridden at compile time via:
-// -ldflags "-X main.agentVersion=v1.1.0"
-var agentVersion = "v1.1.0"
+// -ldflags "-X main.agentVersion=v1.1.1"
+var agentVersion = "v1.1.1"
 
 func main() {
 	// Nettoyage de l'ancien binaire .old après une éventuelle mise à jour précédente

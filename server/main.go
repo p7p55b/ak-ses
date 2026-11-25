@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	serverVersion = "v1.1.0"
+	serverVersion = "v1.1.1"
 )
 
 type AgentSession struct {
