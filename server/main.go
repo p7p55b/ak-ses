@@ -698,6 +698,11 @@ func handleAgentWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[+] Machine connectée: %s (%s, %s, %s)", agentID, hostname, osName, agentVer)
 
+	// Si un admin regardait deja cette machine, lui demander d'activer le stream
+	if countViewers(agentID) > 0 {
+		notifyAgentStreamControl(agentID, true, 20)
+	}
+
 	defer func() {
 		agentsMu.Lock()
 		delete(agents, agentID)
@@ -794,6 +799,39 @@ func notifyAgentDisconnect(agentID string) {
 	}
 }
 
+func countViewers(agentID string) int {
+	viewersMu.RLock()
+	defer viewersMu.RUnlock()
+	c := 0
+	for _, v := range viewers {
+		if v.agentID == agentID {
+			c++
+		}
+	}
+	return c
+}
+
+func notifyAgentStreamControl(agentID string, start bool, fps int) {
+	agentsMu.RLock()
+	agent, exists := agents[agentID]
+	agentsMu.RUnlock()
+	if !exists || agent.Conn == nil {
+		return
+	}
+	msgType := "stream_stop"
+	if start {
+		msgType = "stream_start"
+	}
+	msg, _ := json.Marshal(map[string]interface{}{
+		"type": msgType,
+		"fps":  fps,
+	})
+	agent.mu.Lock()
+	_ = agent.Conn.WriteMessage(websocket.TextMessage, msg)
+	agent.mu.Unlock()
+	log.Printf("[*] Stream control vers %s: %s (viewers actifs: %d)", agentID, msgType, countViewers(agentID))
+}
+
 func handleAdminWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -809,16 +847,38 @@ func handleAdminWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	viewersMu.Lock()
+	previousCount := 0
+	for _, v := range viewers {
+		if v.agentID == agentID {
+			previousCount++
+		}
+	}
 	viewers[conn] = viewer
 	viewersMu.Unlock()
 
-	log.Printf("[+] Admin a ouvert le contrôle de l'agent: %s", agentID)
+	log.Printf("[+] Admin a ouvert le contrôle de l'agent: %s (viewers: %d)", agentID, previousCount+1)
+
+	// Demarrer le flux video a la demande si premier viewer
+	if previousCount == 0 {
+		notifyAgentStreamControl(agentID, true, 20)
+	}
 
 	defer func() {
 		viewersMu.Lock()
 		delete(viewers, conn)
+		remainingCount := 0
+		for _, v := range viewers {
+			if v.agentID == agentID {
+				remainingCount++
+			}
+		}
 		viewersMu.Unlock()
-		log.Printf("[-] Admin a fermé le contrôle de l'agent: %s", agentID)
+		log.Printf("[-] Admin a fermé le contrôle de l'agent: %s (viewers restants: %d)", agentID, remainingCount)
+
+		// Mettre en veille complete le flux video si plus aucun admin ne regarde
+		if remainingCount == 0 {
+			notifyAgentStreamControl(agentID, false, 0)
+		}
 	}()
 
 	// L'admin envoie des commandes (clavier/souris)

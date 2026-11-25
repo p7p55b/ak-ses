@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -25,7 +26,7 @@ import (
 )
 
 type InputMessage struct {
-	Type    string  `json:"type"`    // "mouse_move", "mouse_down", "mouse_up", "mouse_scroll", "key_down", "key_up", "key_text", "select_display", "self_update"
+	Type    string  `json:"type"`    // "mouse_move", "mouse_down", "mouse_up", "mouse_scroll", "key_down", "key_up", "key_text", "select_display", "self_update", "stream_start", "stream_stop"
 	Display int     `json:"display"` // Selected display index (0, 1, ...)
 	X       float64 `json:"x"`       // Normalized 0.0 to 1.0 within selected display
 	Y       float64 `json:"y"`       // Normalized 0.0 to 1.0 within selected display
@@ -35,6 +36,7 @@ type InputMessage struct {
 	Text    string  `json:"text"`    // Direct Unicode input
 	URL     string  `json:"url"`     // Download URL for self_update
 	Version string  `json:"version"` // Target version
+	FPS     int     `json:"fps"`     // Target FPS for stream_start
 }
 
 type DisplayInfo struct {
@@ -43,7 +45,41 @@ type DisplayInfo struct {
 	Height int `json:"height"`
 }
 
-var currentDisplayIndex = 0
+var (
+	currentDisplayIndex = 0
+
+	// Gestion du streaming a la demande (veille 0% CPU par defaut)
+	streamMu   sync.Mutex
+	streaming  = false
+	streamCond = sync.NewCond(&streamMu)
+	activeFPS  = 20
+)
+
+func setStreamingState(enabled bool, fps int) {
+	streamMu.Lock()
+	streaming = enabled
+	if fps > 0 {
+		activeFPS = fps
+	}
+	if streaming {
+		streamCond.Broadcast()
+	}
+	streamMu.Unlock()
+}
+
+// Calcul d'un hash echantillonne ultra-rapide (0.01ms) pour detecter les images fixes sans peser sur le CPU
+func fastSampleHash(pix []byte) uint64 {
+	var h uint64 = 14695981039346656037
+	step := len(pix) / 8192
+	if step < 4 {
+		step = 4
+	}
+	for i := 0; i < len(pix); i += step {
+		h ^= uint64(pix[i])
+		h *= 1099511628211
+	}
+	return h
+}
 
 // defaultServer can be overridden at compile time via:
 // -ldflags "-X main.defaultServer=your-domain.com"
@@ -116,9 +152,16 @@ func main() {
 
 		done := make(chan struct{})
 
-		// Goroutine 1 : Ecoute des inputs clavier / souris / display switch / self_update venant du Dashboard
+		// Goroutine 1 : Ecoute des inputs clavier / souris / display switch / self_update / stream_control venant du Dashboard
 		go func() {
-			defer close(done)
+			defer func() {
+				close(done)
+				// Reveiller la goroutine de capture si elle etait endormie pour qu'elle sorte proprement
+				streamMu.Lock()
+				streamCond.Broadcast()
+				streamMu.Unlock()
+			}()
+
 			for {
 				_, message, err := conn.ReadMessage()
 				if err != nil {
@@ -128,6 +171,18 @@ func main() {
 
 				var input InputMessage
 				if err := json.Unmarshal(message, &input); err != nil {
+					continue
+				}
+
+				if input.Type == "stream_start" {
+					log.Printf("[*] Demarrage du flux video a la demande (fps: %d)", input.FPS)
+					setStreamingState(true, input.FPS)
+					continue
+				}
+
+				if input.Type == "stream_stop" {
+					log.Printf("[*] Mise en veille du flux video (aucun viewer actif)")
+					setStreamingState(false, 0)
 					continue
 				}
 
@@ -150,52 +205,86 @@ func main() {
 			}
 		}()
 
-		// Goroutine 2 : Capture d'écran et streaming
-		tickerInterval := time.Duration(1000/(*fps)) * time.Millisecond
-		ticker := time.NewTicker(tickerInterval)
+		// Goroutine 2 : Capture d'ecran et streaming A LA DEMANDE (veille 0% CPU quand personne ne regarde)
 		buf := new(bytes.Buffer)
 		jpegOpts := &jpeg.Options{Quality: *quality}
+		var lastHash uint64
+		var lastSent time.Time
 
 		active := true
 		for active {
+			// Attente en veille complete (0.0% CPU) tant que streaming n'est pas active
+			streamMu.Lock()
+			for !streaming && active {
+				streamCond.Wait()
+			}
+			currentFPS := activeFPS
+			if currentFPS <= 0 {
+				currentFPS = *fps
+			}
+			streamMu.Unlock()
+
+			if !active {
+				break
+			}
+
+			// Verifier si deconnexion ou arret demande
 			select {
 			case <-done:
 				active = false
+				continue
 			case <-interrupt:
-				log.Println("[*] Arrêt demandé...")
+				log.Println("[*] Arret demande...")
 				conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 				conn.Close()
 				return
-			case <-ticker.C:
-				n := screenshot.NumActiveDisplays()
-				if n == 0 {
-					continue
-				}
-
-				if currentDisplayIndex >= n {
-					currentDisplayIndex = 0
-				}
-
-				bounds := screenshot.GetDisplayBounds(currentDisplayIndex)
-				img, err := screenshot.CaptureRect(bounds)
-				if err != nil {
-					continue
-				}
-
-				buf.Reset()
-				if err := jpeg.Encode(buf, img, jpegOpts); err != nil {
-					continue
-				}
-
-				// Envoi de l'image compressée (Binary Message)
-				if err := conn.WriteMessage(websocket.BinaryMessage, buf.Bytes()); err != nil {
-					log.Printf("[-] Erreur d'envoi vidéo: %v", err)
-					active = false
-				}
+			default:
 			}
+
+			n := screenshot.NumActiveDisplays()
+			if n == 0 {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+
+			if currentDisplayIndex >= n {
+				currentDisplayIndex = 0
+			}
+
+			bounds := screenshot.GetDisplayBounds(currentDisplayIndex)
+			img, err := screenshot.CaptureRect(bounds)
+			if err != nil {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+
+			// Detection de trame identique : evite l'encodage JPEG inutile si l'ecran est fixe (ex: bureau statique)
+			h := fastSampleHash(img.Pix)
+			now := time.Now()
+			if h == lastHash && now.Sub(lastSent) < 1500*time.Millisecond {
+				// Ecran fixe : economie CPU et bande passante
+				time.Sleep(time.Duration(1000/currentFPS) * time.Millisecond)
+				continue
+			}
+			lastHash = h
+			lastSent = now
+
+			buf.Reset()
+			if err := jpeg.Encode(buf, img, jpegOpts); err != nil {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+
+			// Envoi de l'image compressee (Binary Message)
+			if err := conn.WriteMessage(websocket.BinaryMessage, buf.Bytes()); err != nil {
+				log.Printf("[-] Erreur d'envoi video: %v", err)
+				active = false
+			}
+
+			time.Sleep(time.Duration(1000/currentFPS) * time.Millisecond)
 		}
 
-		ticker.Stop()
+		setStreamingState(false, 0)
 		conn.Close()
 		log.Println("[*] Reconnexion dans 2 secondes...")
 		time.Sleep(2 * time.Second)
