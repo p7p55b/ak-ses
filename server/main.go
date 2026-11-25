@@ -177,10 +177,16 @@ func sendUpdateToAgents(targetAgentID, version, downloadURL string) []string {
 	agentsMu.RLock()
 	defer agentsMu.RUnlock()
 
+	sep := "?"
+	if strings.Contains(downloadURL, "?") {
+		sep = "&"
+	}
+	cacheBustedURL := fmt.Sprintf("%s%st=%d", downloadURL, sep, time.Now().Unix())
+
 	msg, _ := json.Marshal(map[string]interface{}{
 		"type":    "self_update",
 		"version": version,
-		"url":     downloadURL,
+		"url":     cacheBustedURL,
 	})
 
 	var updated []string
@@ -221,6 +227,9 @@ func main() {
 		}
 		w.Header().Set("Content-Disposition", "attachment; filename=agent.exe")
 		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
 		http.ServeFile(w, r, agentPath)
 	})
 
@@ -244,13 +253,14 @@ func main() {
 		}
 		script := fmt.Sprintf(`Stop-Process -Name "agent" -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 600
-$url = "%s://%s/dl/agent.exe"
+$url = "%s://%s/dl/agent.exe?t=%d"
 $out = "$env:TEMP\agent.exe"
 (New-Object System.Net.WebClient).DownloadFile($url, $out)
 Unblock-File $out -ErrorAction SilentlyContinue
 Start-Process -FilePath $out -ArgumentList "-server %s" -NoNewWindow
-`, proto, host, host)
+`, proto, host, time.Now().Unix(), host)
 		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
 		w.Write([]byte(script))
 	})
 
@@ -370,7 +380,7 @@ Start-Process -FilePath $out -ArgumentList "-server %s" -NoNewWindow
 		tmpExe := filepath.Join(*binDir, fmt.Sprintf("agent_build_%d.exe", time.Now().UnixNano()))
 		targetExe := filepath.Join(*binDir, "agent.exe")
 
-		ldflags := fmt.Sprintf("-X 'main.defaultServer=%s' -s -w", serverHost)
+		ldflags := fmt.Sprintf("-X 'main.defaultServer=%s' -X 'main.agentVersion=%s' -s -w", serverHost, serverVersion)
 		if hideConsole {
 			ldflags += " -H=windowsgui"
 		}
