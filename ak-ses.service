@@ -5,6 +5,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/root
+Environment="HOME=/root" "GOPATH=/root/go"
 ExecStart=/root/server-linux -port 8080 -bin-dir /root/bin
 Restart=always
 RestartSec=3

