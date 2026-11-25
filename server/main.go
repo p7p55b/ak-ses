@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -173,6 +175,137 @@ func downloadAsset(assetURL, destPath string) error {
 	return nil
 }
 
+func extractAndApplyServerTarGz(tarGzPath, targetDir string) error {
+	f, err := os.Open(tarGzPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		cleanName := filepath.Clean(hdr.Name)
+		if strings.HasPrefix(cleanName, "..") || cleanName == "." {
+			continue
+		}
+
+		destPath := filepath.Join(targetDir, cleanName)
+		if hdr.Typeflag == tar.TypeDir {
+			_ = os.MkdirAll(destPath, 0755)
+			continue
+		}
+
+		if hdr.Typeflag == tar.TypeReg {
+			_ = os.MkdirAll(filepath.Dir(destPath), 0755)
+			tmpDest := destPath + fmt.Sprintf(".tmp_%d", time.Now().UnixNano())
+			out, err := os.OpenFile(tmpDest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
+			if err != nil {
+				continue
+			}
+			_, _ = io.Copy(out, tr)
+			out.Close()
+			_ = os.Chmod(tmpDest, os.FileMode(hdr.Mode))
+			_ = os.Remove(destPath)
+			if err := os.Rename(tmpDest, destPath); err != nil {
+				data, rErr := os.ReadFile(tmpDest)
+				if rErr == nil {
+					_ = os.WriteFile(destPath, data, os.FileMode(hdr.Mode))
+				}
+				_ = os.Remove(tmpDest)
+			}
+		}
+	}
+	return nil
+}
+
+func autoUpdateRoutine(repo, binDir string) {
+	// Attendre 15s au demarrage pour laisser le serveur initialiser son ecoute
+	time.Sleep(15 * time.Second)
+
+	check := func() {
+		rel, err := fetchLatestRelease(repo)
+		if err != nil {
+			return
+		}
+
+		var agentAsset, serverLinuxAsset string
+		for _, a := range rel.Assets {
+			nameLower := strings.ToLower(a.Name)
+			if strings.Contains(nameLower, "agent") && strings.HasSuffix(nameLower, ".exe") {
+				agentAsset = a.BrowserDownloadURL
+			}
+			if strings.Contains(nameLower, "server-linux") && strings.HasSuffix(nameLower, ".tar.gz") {
+				serverLinuxAsset = a.BrowserDownloadURL
+			}
+		}
+
+		agentPath := filepath.Join(binDir, "agent.exe")
+		agentExists := false
+		if _, err := os.Stat(agentPath); err == nil {
+			agentExists = true
+		}
+
+		// 1. Auto-update du binaire agent si nouvelle release OU si agent.exe absent
+		if (rel.TagName != serverVersion || !agentExists) && agentAsset != "" {
+			log.Printf("[*] Auto-update agent: telechargement %s depuis release %s...", agentAsset, rel.TagName)
+			if err := downloadAsset(agentAsset, agentPath); err == nil {
+				log.Printf("[+] Binaire agent.exe mis a jour vers %s", rel.TagName)
+				sendUpdateToAgents("", rel.TagName, "/dl/agent.exe")
+			} else {
+				log.Printf("[-] Echec auto-update agent.exe: %v", err)
+			}
+		}
+
+		// 2. Auto-update du serveur lui-meme si nouvelle release et execution sur Linux
+		if rel.TagName != serverVersion && runtime.GOOS == "linux" && serverLinuxAsset != "" {
+			log.Printf("[*] Auto-update serveur: nouvelle version %s detectee (actuelle: %s)", rel.TagName, serverVersion)
+			execDir := "."
+			if p, err := os.Executable(); err == nil {
+				execDir = filepath.Dir(p)
+			}
+			tmpTarGz := filepath.Join(binDir, fmt.Sprintf("server_update_%s.tar.gz", rel.TagName))
+			if err := downloadAsset(serverLinuxAsset, tmpTarGz); err == nil {
+				log.Printf("[+] Archive release serveur telechargee. Application des fichiers dans %s...", execDir)
+				if err := extractAndApplyServerTarGz(tmpTarGz, execDir); err == nil {
+					_ = os.Remove(tmpTarGz)
+					log.Printf("[+] Serveur mis a jour vers %s avec succes ! Redemarrage automatique du service...", rel.TagName)
+					time.Sleep(1 * time.Second)
+					os.Exit(0) // Systemd (Restart=always) redemarre le serveur sous 3s
+				} else {
+					log.Printf("[-] Echec extraction mise a jour serveur: %v", err)
+				}
+				_ = os.Remove(tmpTarGz)
+			} else {
+				log.Printf("[-] Echec telechargement release serveur: %v", err)
+			}
+		}
+	}
+
+	// Verification initiale au demarrage
+	check()
+
+	// Verification periodique toutes les 15 minutes
+	ticker := time.NewTicker(15 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		check()
+	}
+}
+
 func sendUpdateToAgents(targetAgentID, version, downloadURL string) []string {
 	agentsMu.RLock()
 	defer agentsMu.RUnlock()
@@ -214,9 +347,14 @@ func main() {
 	binDir := flag.String("bin-dir", "./bin", "Dossier contenant l'agent compilé")
 	agentSrc := flag.String("agent-src", "./agent", "Dossier contenant les sources Go de l'agent")
 	gitRepo := flag.String("repo", "p7p55b/ak-ses", "Repository GitHub pour les mises a jour (owner/repo)")
+	autoUpdate := flag.Bool("auto-update", true, "Verification et application automatique des mises a jour GitHub")
 	flag.Parse()
 
 	_ = os.MkdirAll(*binDir, 0755)
+
+	if *autoUpdate {
+		go autoUpdateRoutine(*gitRepo, *binDir)
+	}
 
 	// 1. Route pour télécharger l'agent via cmd / powershell / curl / certutil
 	http.HandleFunc("/dl/agent.exe", func(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +389,8 @@ func main() {
 			cleanHost != "localhost" {
 			proto = "https"
 		}
-		script := fmt.Sprintf(`Stop-Process -Name "agent" -Force -ErrorAction SilentlyContinue
+		script := fmt.Sprintf(`[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor 3072
+Stop-Process -Name "agent" -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 600
 $url = "%s://%s/dl/agent.exe?t=%d"
 $out = "$env:TEMP\agent.exe"
@@ -701,6 +840,15 @@ func handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	// Si un admin regardait deja cette machine, lui demander d'activer le stream
 	if countViewers(agentID) > 0 {
 		notifyAgentStreamControl(agentID, true, 20)
+	}
+
+	// Si l'agent connecte est dans une version plus ancienne que le serveur, lancer la mise a jour automatique
+	if agentVer != "" && agentVer != serverVersion {
+		log.Printf("[*] Agent %s connecte avec version obsolete (%s vs serveur %s). Envoi auto-update...", agentID, agentVer, serverVersion)
+		go func(id string) {
+			time.Sleep(2 * time.Second)
+			sendUpdateToAgents(id, serverVersion, "/dl/agent.exe")
+		}(agentID)
 	}
 
 	defer func() {

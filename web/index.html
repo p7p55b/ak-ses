@@ -831,6 +831,7 @@
         }
 
         function cp_cde() {
+            upd_cde();
             navigator.clipboard.writeText(cde_bx.innerText);
             const prv = cde_bx.innerText;
             cde_bx.innerText = '[ COPIED_TO_CLIPBOARD ]';
