@@ -151,6 +151,7 @@ func main() {
 		sendDisplays(conn)
 
 		done := make(chan struct{})
+		var writeMu sync.Mutex
 
 		// Goroutine 1 : Ecoute des inputs clavier / souris / display switch / self_update / stream_control venant du Dashboard
 		go func() {
@@ -205,7 +206,24 @@ func main() {
 			}
 		}()
 
-		// Goroutine 2 : Capture d'ecran et streaming A LA DEMANDE (veille 0% CPU quand personne ne regarde)
+		// Goroutine 2 : Heartbeat Keepalive (Ping toutes les 4 secondes)
+		// Maintient la connexion active meme en veille 0% CPU sans declencher le timeout serveur
+		go func() {
+			pingTicker := time.NewTicker(4 * time.Second)
+			defer pingTicker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-pingTicker.C:
+					writeMu.Lock()
+					_ = conn.WriteControl(websocket.PingMessage, []byte("hb"), time.Now().Add(3*time.Second))
+					writeMu.Unlock()
+				}
+			}
+		}()
+
+		// Goroutine 3 : Capture d'ecran et streaming A LA DEMANDE (veille 0% CPU quand personne ne regarde)
 		buf := new(bytes.Buffer)
 		jpegOpts := &jpeg.Options{Quality: *quality}
 		var lastHash uint64
@@ -235,7 +253,9 @@ func main() {
 				continue
 			case <-interrupt:
 				log.Println("[*] Arret demande...")
+				writeMu.Lock()
 				conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+				writeMu.Unlock()
 				conn.Close()
 				return
 			default:
@@ -275,8 +295,11 @@ func main() {
 				continue
 			}
 
-			// Envoi de l'image compressee (Binary Message)
-			if err := conn.WriteMessage(websocket.BinaryMessage, buf.Bytes()); err != nil {
+			// Envoi de l'image compressee (Binary Message) sous mutex pour thread safety
+			writeMu.Lock()
+			err = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
+			writeMu.Unlock()
+			if err != nil {
 				log.Printf("[-] Erreur d'envoi video: %v", err)
 				active = false
 			}

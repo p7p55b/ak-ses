@@ -859,16 +859,21 @@ func handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		notifyAgentDisconnect(agentID)
 	}()
 
-	// Détecte une déconnexion brutale (crash/wifi coupé) sous 6s
-	conn.SetReadDeadline(time.Now().Add(6 * time.Second))
+	// Heartbeat : attente de messages (frames binaires ou pings) sous 30s
+	const readTimeout = 30 * time.Second
+	conn.SetReadDeadline(time.Now().Add(readTimeout))
+	conn.SetPingHandler(func(appData string) error {
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
+		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(3*time.Second))
+	})
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(6 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
 		return nil
 	})
 
 	// L'agent envoie des frames binaires ou des messages texte (displays info)
 	for {
-		conn.SetReadDeadline(time.Now().Add(6 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
 			break
