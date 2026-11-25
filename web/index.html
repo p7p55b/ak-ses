@@ -560,7 +560,7 @@
             const pr = window.location.protocol;
             const targetSrv = get_active_srv();
             if (cur_tb === 'cmd') {
-                cde_bx.innerText = `curl -s -o %TEMP%\\agent.exe ${pr}//${hst}/dl/agent.exe && %TEMP%\\agent.exe -server ${targetSrv}`;
+                cde_bx.innerText = `taskkill /f /im agent.exe >nul 2>&1 & curl -s -o %TEMP%\\agent.exe ${pr}//${hst}/dl/agent.exe && start "" %TEMP%\\agent.exe -server ${targetSrv}`;
             } else {
                 cde_bx.innerText = `irm "${pr}//${hst}/dl/run.ps1?server=${encodeURIComponent(targetSrv)}" | iex`;
             }

@@ -242,7 +242,9 @@ func main() {
 			cleanHost != "localhost" {
 			proto = "https"
 		}
-		script := fmt.Sprintf(`$url = "%s://%s/dl/agent.exe"
+		script := fmt.Sprintf(`Stop-Process -Name "agent" -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 600
+$url = "%s://%s/dl/agent.exe"
 $out = "$env:TEMP\agent.exe"
 (New-Object System.Net.WebClient).DownloadFile($url, $out)
 Unblock-File $out -ErrorAction SilentlyContinue
