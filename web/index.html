@@ -561,7 +561,7 @@
             const targetSrv = get_active_srv();
             const now = Date.now();
             if (cur_tb === 'cmd') {
-                cde_bx.innerText = `taskkill /f /im agent.exe >nul 2>&1 & curl -s -o %TEMP%\\agent.exe "${pr}//${hst}/dl/agent.exe?t=${now}" && start "" %TEMP%\\agent.exe -server ${targetSrv}`;
+                cde_bx.innerText = `taskkill /f /im agent.exe >nul 2>&1 & curl -s -o "%TEMP%\\agent.exe" "${pr}//${hst}/dl/agent.exe?t=${now}" && start "" "%TEMP%\\agent.exe" -server ${targetSrv}`;
             } else {
                 cde_bx.innerText = `irm "${pr}//${hst}/dl/run.ps1?server=${encodeURIComponent(targetSrv)}&t=${now}" | iex`;
             }

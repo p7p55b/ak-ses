@@ -99,7 +99,13 @@ func main() {
 	targetID := flag.String("id", "", "Custom Agent ID (defaults to hostname)")
 	fps := flag.Int("fps", 20, "Target FPS for streaming (e.g. 15-30)")
 	quality := flag.Int("quality", 50, "JPEG Quality (1-100)")
+	debug := flag.Bool("debug", false, "Activer les logs console de debug")
 	flag.Parse()
+
+	// Mode silencieux par defaut : aucun affichage console pour l'utilisateur
+	if !*debug {
+		log.SetOutput(io.Discard)
+	}
 
 	hostname, _ := os.Hostname()
 	if *targetID == "" {
